@@ -93,13 +93,13 @@ async def get_user(user_id: int, role: str):
         query_students = students.select().where(students.c.id == user_id)
         student = await database.fetch_one(query_students)
         if student is None:
-            raise HTTPException(status_code=404, detail="Student not found")
+            raise HTTPException(status_code=404, detail="Студента не знайдено")
         return student
     elif role == 'teacher':
         query_teachers = teachers.select().where(teachers.c.id == user_id)
         teacher = await database.fetch_one(query_teachers)
         if teachers is None:
-            raise HTTPException(status_code=404, detail="Teacher not found")
+            raise HTTPException(status_code=404, detail="Вчителя не знайдено")
         return teachers
 
 
@@ -108,7 +108,7 @@ async def create_course(name: str, password: str, title: str):
     teacher = await authenticate_teacher(name, password)
     query = courses.insert().values(title=title, teacher_name=teacher['name'])
     await database.execute(query)
-    return {'message': 'Course created successfully'}
+    return {'message': 'Курс успішно створено'}
 
 @app.post('/sign/courses', summary='Записатись на курс', tags=['Курси'])
 async def sign_course(name: str, password: str, course_title: str):
@@ -116,17 +116,23 @@ async def sign_course(name: str, password: str, course_title: str):
     query_course = courses.select().where(courses.c.title == course_title)
     course = await database.fetch_one(query_course)
     if not course:
-        raise HTTPException(status_code=404, detail="Course not found")
-    query = student_course.insert().values(course_title=course_title, student_name=student['name'])
-    await database.execute(query)
-    return {'message': f'Student {name} successfully enrolled in {course_title}'}
+        raise HTTPException(status_code=404, detail="Курс не знайдено")
+    student_query = student_course.select().where(student_course.c.course_title == course_title)
+    student_records = await database.fetch_all(student_query)
+    student_names = [record["student_name"] for record in student_records]
+    if len(student_names) >= 10:
+        raise HTTPException(status_code=404, detail="Курс переповнений")
+    else:
+        query = student_course.insert().values(course_title=course_title, student_name=student['name'])
+        await database.execute(query)
+        return {'message': f'Студент {name} успішно приєднався до {course_title}'}
 
 @app.get('/course/students', summary='Курси із студентами', tags=['Курси'])
 async def get_courses_with_students():
     course_query = courses.select()
     courses_list = await database.fetch_all(course_query)
     if not courses_list:
-        raise HTTPException(status_code=404, detail="No courses found")
+        raise HTTPException(status_code=404, detail="Курс не знайдено")
     result = []
     for course in courses_list:
         course_title = course["title"]
@@ -149,12 +155,8 @@ async def get_courses_with_students():
 
 
 
-
-
-
 if __name__ == '__main__':
     uvicorn.run(app=app, host='127.0.0.1', port=4000)
-
 
 '''Функціональність:
 1. Користувачі:
