@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException
+'''from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field, EmailStr, field_validator
 import uvicorn
 from datetime import datetime
@@ -172,7 +172,7 @@ def get_project(id: int):
 
 
 if __name__ == '__main__':
-    uvicorn.run(app=app, host='127.0.0.1', port=4000)
+    uvicorn.run(app=app, host='127.0.0.1', port=4000)'''
 
 """
 Авторизація:
@@ -206,3 +206,4 @@ if __name__ == '__main__':
 Кількість завдань:
 Додай до кожного проєкту поле total_tasks, яке автоматично рахує кількість завдань.
 """
+
