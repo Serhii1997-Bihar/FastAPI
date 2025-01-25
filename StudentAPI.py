@@ -122,6 +122,8 @@ async def sign_course(name: str, password: str, course_title: str):
     student_names = [record["student_name"] for record in student_records]
     if len(student_names) >= 10:
         raise HTTPException(status_code=404, detail="Курс переповнений")
+    elif name in student_names:
+        raise HTTPException(status_code=400, detail="Студент вже записаний на курс")
     else:
         query = student_course.insert().values(course_title=course_title, student_name=student['name'])
         await database.execute(query)
