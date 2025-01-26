@@ -40,6 +40,8 @@ student_course = Table(
     metadata,
     Column("course_title", String(50), ForeignKey("courses.title"), primary_key=True),
     Column("student_name", String(50), ForeignKey("students.name"), primary_key=True),
+    Column("first_score", Integer),
+    Column("second_score", Integer)
 )
 
 engine = create_engine(DATABASE_URL)
@@ -162,10 +164,53 @@ async def get_courses_with_students():
             "students": student_names})
     return result
 
-@app.get('/', summary='Курси із студентами', tags=['Курси'])
-async def get_all():
-    query = student_course.select()
-    return await database.fetch_all(query)
+@app.post('/course/score', summary='Поставити оцінку', tags=['Курси'])
+async def put_score(username: str, password: str, course_title: str, student: str, score: int):
+    teacher = await authenticate_teacher(username, password)
+    if not teacher:
+        raise HTTPException(status_code=403, detail="Викладача не знайдено або пароль неправильний")
+    query = student_course.select().where(
+        (student_course.c.course_title == course_title) &
+        (student_course.c.student_name == student)
+    )
+    course = await database.fetch_one(query)
+    if not course:
+        raise HTTPException(status_code=404, detail=f"Студента {student} не знайдено в курсі {course_title}")
+
+    query2 = student_course.update().where(
+        (student_course.c.course_title == course_title) &
+        (student_course.c.student_name == student)
+    ).values(first_score=score)
+    await database.execute(query2)
+    return {'message': f'{student} отримано оцінку {score}'}
+
+
+@app.get('/course/scores', summary='Переглянути оцінки', tags=['Курси'])
+async def get_scores(course_title: str):
+    result = []
+    query = student_course.select().where(student_course.c.course_title == course_title)
+    course = await database.fetch_all(query)
+    for record in course:
+        result.append({
+            'student': record['student_name'],
+            'score': record['first_score']})
+    return result
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 
@@ -193,9 +238,6 @@ id, назву, опис, викладача, список матеріалів,
 Додавати матеріали курсу.
 Виставляти оцінки студентам за певні теми курсу.
 Адміністратор може видаляти курси.
-3. Фільтрація та сортування:
-Курси можна фільтрувати за викладачем, темою або статусом (відкритий/закритий для реєстрації).
-Оцінки студентів можна фільтрувати за курсом та сортувати за балами.
 4. Валідація:
 Курс не може бути створений без викладача.
 Дата початку курсу повинна бути у майбутньому.
