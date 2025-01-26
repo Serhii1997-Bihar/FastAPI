@@ -1,5 +1,6 @@
 from fastapi import FastAPI, HTTPException
 import uvicorn
+from pydantic import BaseModel, Field, field_validator
 from databases import Database
 from sqlalchemy import MetaData, Table, Column, Integer, String, ForeignKey, create_engine
 
@@ -45,6 +46,15 @@ engine = create_engine(DATABASE_URL)
 metadata.create_all(engine)
 app = FastAPI()
 
+class UserCreateSchema(BaseModel):
+    name: str = Field(..., max_length=50)
+    role: str = Field(...)
+    password: str = Field(..., min_length=6)
+    @field_validator("name")
+    def check_name_is_string(cls, value):
+        if not value.isalpha():
+            raise ValueError("Ім'я повинно містити тільки літери")
+        return value
 
 async def authenticate_student(name: str, password: str):
     query = students.select().where(students.c.name == name)
@@ -69,16 +79,20 @@ async def shutdown():
     await database.disconnect()
 
 @app.post("/create/user/", summary='Створити користувача', tags=['Користувачі'])
-async def create_user(name: str, role: str, password: str):
-    if role == 'student':
-        query = students.insert().values(name=name, role=role, password=password)
+async def create_user(user: UserCreateSchema):
+    if user.role == 'student':
+        query = students.insert().values(name=user.name, role=user.role, password=user.password)
         last_record_id = await database.execute(query)
+        return {'message': f'Студент {user.name} успішно створений'}
+    elif user.role == 'teacher':
+        query = teachers.insert().values(name=user.name, role=user.role, password=user.password)
+        last_record_id = await database.execute(query)
+        return {'message': f'Викладач {user.name} успішно створений'}
     else:
-        query = teachers.insert().values(name=name, role=role, password=password)
-        last_record_id = await database.execute(query)
-    return {"id": last_record_id, "name": name, "role": role}
+        return {'message': f'Ви вибрали не існуючу роль. Виберіть student або teacher'}
 
-@app.get("/users/", summary='Отримати користувачів', tags=['Користувачі'])
+
+@app.get("/users/{role}", summary='Отримати користувачів', tags=['Користувачі'])
 async def get_users(role: str):
     if role == 'student':
         query = students.select()
@@ -148,7 +162,10 @@ async def get_courses_with_students():
             "students": student_names})
     return result
 
-
+@app.get('/', summary='Курси із студентами', tags=['Курси'])
+async def get_all():
+    query = student_course.select()
+    return await database.fetch_all(query)
 
 
 
