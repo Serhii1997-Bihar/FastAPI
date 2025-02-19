@@ -1,4 +1,4 @@
-'''from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field, EmailStr
 import uvicorn
 from datetime import datetime
@@ -127,5 +127,4 @@ def get_title_task(title: str):
             search_title.append(element)
     return search_title
 
-'''
 

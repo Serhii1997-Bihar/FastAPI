@@ -1,200 +1,164 @@
-from fastapi import FastAPI, HTTPException
-import uvicorn
+from fastapi import FastAPI, File, UploadFile, HTTPException
+from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
+from sqlalchemy.orm import sessionmaker, declarative_base
+from sqlalchemy import MetaData, Table, Column, Integer, String, ForeignKey, LargeBinary
 from pydantic import BaseModel, Field, field_validator
-from databases import Database
-from sqlalchemy import MetaData, Table, Column, Integer, String, ForeignKey, create_engine
+import re
 
-DATABASE_URL = "sqlite:///./database.db"
+DATABASE_URL = "sqlite+aiosqlite:///./database.db"
 
-database = Database(DATABASE_URL)
+engine = create_async_engine(DATABASE_URL, echo=True)
+async_session = sessionmaker(
+    engine, expire_on_commit=False, class_=AsyncSession
+)
+Base = declarative_base()
+
 metadata = MetaData()
 
-students = Table(
-    "students",
-    metadata,
-    Column("id", Integer, primary_key=True, index=True),
-    Column("name", String(50), unique=True),
-    Column("role", String(20)),
-    Column("password", String(50))
-)
+class Student(Base):
+    __tablename__ = "students"
+    id = Column(Integer, primary_key=True, index=True)
+    name = Column(String(50), unique=True)
+    role = Column(String(20))
+    password = Column(String(50))
 
-teachers = Table(
-    "teachers",
-    metadata,
-    Column("id", Integer, primary_key=True, index=True),
-    Column("name", String(50), unique=True),
-    Column("role", String(20)),
-    Column("password", String(50))
-)
+class Teacher(Base):
+    __tablename__ = "teachers"
+    id = Column(Integer, primary_key=True, index=True)
+    name = Column(String(50), unique=True)
+    role = Column(String(20))
+    password = Column(String(50))
 
-courses = Table(
-    "courses",
-    metadata,
-    Column("id", Integer, primary_key=True, index=True),
-    Column("title", String(50), unique=True),
-    Column("teacher_name", String, ForeignKey("teachers.name")),
-)
+class Course(Base):
+    __tablename__ = "courses"
+    id = Column(Integer, primary_key=True, index=True)
+    title = Column(String(50), unique=True)
+    teacher_name = Column(String, ForeignKey("teachers.name"))
+    matherials = Column(LargeBinary)
 
-student_course = Table(
-    "student_course",
-    metadata,
-    Column("course_title", String(50), ForeignKey("courses.title"), primary_key=True),
-    Column("student_name", String(50), ForeignKey("students.name"), primary_key=True),
-    Column("first_score", Integer),
-    Column("second_score", Integer)
-)
+class StudentCourse(Base):
+    __tablename__ = "student_course"
+    course_title = Column(String(50), ForeignKey("courses.title"), primary_key=True)
+    student_name = Column(String(50), ForeignKey("students.name"), primary_key=True)
+    first_score = Column(Integer)
+    second_score = Column(Integer)
 
-engine = create_engine(DATABASE_URL)
-metadata.create_all(engine)
+# Ініціалізація бази даних
+async def init_db():
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+
 app = FastAPI()
 
 class UserCreateSchema(BaseModel):
     name: str = Field(..., max_length=50)
-    role: str = Field(...)
+    role: str = Field(..., min_length=5)
     password: str = Field(..., min_length=6)
+
     @field_validator("name")
     def check_name_is_string(cls, value):
-        if not value.isalpha():
-            raise ValueError("Ім'я повинно містити тільки літери")
+        if not re.match("^[A-Za-zА-Яа-яІіЇїЄєҐґ0-9\s]+$", value):
+            raise ValueError("Ім'я повинно містити лише літери та пробіли")
         return value
 
-async def authenticate_student(name: str, password: str):
-    query = students.select().where(students.c.name == name)
-    student = await database.fetch_one(query)
-    if student['password'] == password:
+async def authenticate_student(name: str, password: str, session: AsyncSession):
+    result = await session.execute(
+        Student.__table__.select().where(Student.name == name)
+    )
+    student = result.fetchone()
+    if student and student.password == password:
         return student
     raise HTTPException(status_code=403, detail="Invalid username or password")
-async def authenticate_teacher(name: str, password: str):
-    query = teachers.select().where(teachers.c.name == name)
-    teacher = await database.fetch_one(query)
-    if teacher['password'] == password:
+
+async def authenticate_teacher(name: str, password: str, session: AsyncSession):
+    result = await session.execute(
+        Teacher.__table__.select().where(Teacher.name == name)
+    )
+    teacher = result.fetchone()
+    if teacher and teacher.password == password:
         return teacher
     raise HTTPException(status_code=403, detail="Invalid username or password")
 
-
 @app.on_event("startup")
 async def startup():
-    await database.connect()
+    await init_db()
 
-@app.on_event("shutdown")
-async def shutdown():
-    await database.disconnect()
-
-@app.post("/create/user/", summary='Створити користувача', tags=['Користувачі'])
+@app.post("/create/user/", summary="Створити користувача", tags=["Користувачі"])
 async def create_user(user: UserCreateSchema):
-    if user.role == 'student':
-        query = students.insert().values(name=user.name, role=user.role, password=user.password)
-        last_record_id = await database.execute(query)
-        return {'message': f'Студент {user.name} успішно створений'}
-    elif user.role == 'teacher':
-        query = teachers.insert().values(name=user.name, role=user.role, password=user.password)
-        last_record_id = await database.execute(query)
-        return {'message': f'Викладач {user.name} успішно створений'}
-    else:
-        return {'message': f'Ви вибрали не існуючу роль. Виберіть student або teacher'}
+    async with async_session() as session:
+        async with session.begin():
+            if user.role == "student":
+                student = Student(name=user.name, role=user.role, password=user.password)
+                session.add(student)
+                await session.commit()
+                return {"message": f"Студент {user.name} успішно створений"}
+            elif user.role == "teacher":
+                teacher = Teacher(name=user.name, role=user.role, password=user.password)
+                session.add(teacher)
+                await session.commit()
+                return {"message": f"Викладач {user.name} успішно створений"}
+            else:
+                return {"message": "Виберіть правильну роль: student або teacher"}
 
+@app.post("/create/course", summary="Створити курс", tags=["Курси"])
+async def create_course(name: str, password: str, title: str, matherials: UploadFile = File(...)):
+    async with async_session() as session:
+        teacher = await authenticate_teacher(name, password, session)
+        matherial = await matherials.read()
+        course = Course(title=title, teacher_name=teacher.name, matherials=matherial)
+        session.add(course)
+        await session.commit()
+        return {"message": "Курс успішно створено"}
 
-@app.get("/users/{role}", summary='Отримати користувачів', tags=['Користувачі'])
-async def get_users(role: str):
-    if role == 'student':
-        query = students.select()
-        return await database.fetch_all(query)
-    elif role == 'teacher':
-        query = teachers.select()
-        return await database.fetch_all(query)
-
-@app.get("/users/{user_id}", summary='Отримати користувача', tags=['Користувачі'])
-async def get_user(user_id: int, role: str):
-    if role == 'student':
-        query_students = students.select().where(students.c.id == user_id)
-        student = await database.fetch_one(query_students)
-        if student is None:
-            raise HTTPException(status_code=404, detail="Студента не знайдено")
-        return student
-    elif role == 'teacher':
-        query_teachers = teachers.select().where(teachers.c.id == user_id)
-        teacher = await database.fetch_one(query_teachers)
-        if teachers is None:
-            raise HTTPException(status_code=404, detail="Вчителя не знайдено")
-        return teachers
-
-
-@app.post('/create/course', summary='Створити курс', tags=['Курси'])
-async def create_course(name: str, password: str, title: str):
-    teacher = await authenticate_teacher(name, password)
-    query = courses.insert().values(title=title, teacher_name=teacher['name'])
-    await database.execute(query)
-    return {'message': 'Курс успішно створено'}
-
-@app.post('/sign/courses', summary='Записатись на курс', tags=['Курси'])
+@app.post("/sign/courses", summary="Записатись на курс", tags=["Курси"])
 async def sign_course(name: str, password: str, course_title: str):
-    student = await authenticate_student(name, password)
-    query_course = courses.select().where(courses.c.title == course_title)
-    course = await database.fetch_one(query_course)
-    if not course:
-        raise HTTPException(status_code=404, detail="Курс не знайдено")
-    student_query = student_course.select().where(student_course.c.course_title == course_title)
-    student_records = await database.fetch_all(student_query)
-    student_names = [record["student_name"] for record in student_records]
-    if len(student_names) >= 10:
-        raise HTTPException(status_code=404, detail="Курс переповнений")
-    elif name in student_names:
-        raise HTTPException(status_code=400, detail="Студент вже записаний на курс")
-    else:
-        query = student_course.insert().values(course_title=course_title, student_name=student['name'])
-        await database.execute(query)
-        return {'message': f'Студент {name} успішно приєднався до {course_title}'}
-
-@app.get('/course/students', summary='Курси із студентами', tags=['Курси'])
-async def get_courses_with_students():
-    course_query = courses.select()
-    courses_list = await database.fetch_all(course_query)
-    if not courses_list:
-        raise HTTPException(status_code=404, detail="Курс не знайдено")
-    result = []
-    for course in courses_list:
-        course_title = course["title"]
-        course_teacher = course['teacher_name']
-        student_query = student_course.select().where(student_course.c.course_title == course_title)
-        student_records = await database.fetch_all(student_query)
+    async with async_session() as session:
+        student = await authenticate_student(name, password, session)
+        result = await session.execute(
+            Course.__table__.select().where(Course.title == course_title)
+        )
+        course = result.fetchone()
+        if not course:
+            raise HTTPException(status_code=404, detail="Курс не знайдено")
+        student_query = await session.execute(
+            StudentCourse.__table__.select().where(
+                StudentCourse.course_title == course_title
+            )
+        )
+        student_records = student_query.fetchall()
         student_names = [record["student_name"] for record in student_records]
-        result.append({
-            "course_title": course_title,
-            "course_teacher": course_teacher,
-            "students": student_names})
-    return result
+        if len(student_names) >= 10:
+            raise HTTPException(status_code=400, detail="Курс переповнений")
+        elif name in student_names:
+            raise HTTPException(status_code=400, detail="Студент вже записаний на курс")
+        else:
+            student_course = StudentCourse(course_title=course_title, student_name=name)
+            session.add(student_course)
+            await session.commit()
+            return {"message": f"Студент {name} успішно приєднався до {course_title}"}
 
-@app.post('/course/score', summary='Поставити оцінку', tags=['Курси'])
-async def put_score(username: str, password: str, course_title: str, student: str, score: int):
-    teacher = await authenticate_teacher(username, password)
-    if not teacher:
-        raise HTTPException(status_code=403, detail="Викладача не знайдено або пароль неправильний")
-    query = student_course.select().where(
-        (student_course.c.course_title == course_title) &
-        (student_course.c.student_name == student)
-    )
-    course = await database.fetch_one(query)
-    if not course:
-        raise HTTPException(status_code=404, detail=f"Студента {student} не знайдено в курсі {course_title}")
+@app.get("/course/students", summary="Курси із студентами", tags=["Курси"])
+async def get_courses_with_students():
+    async with async_session() as session:
+        result = []
+        courses_list = await session.execute(Course.__table__.select())
+        for course in courses_list:
+            student_query = await session.execute(
+                StudentCourse.__table__.select().where(
+                    StudentCourse.course_title == course.title
+                )
+            )
+            student_names = [record["student_name"] for record in student_query.fetchall()]
+            result.append({
+                "course_title": course.title,
+                "course_teacher": course.teacher_name,
+                "students": student_names
+            })
+        return result
 
-    query2 = student_course.update().where(
-        (student_course.c.course_title == course_title) &
-        (student_course.c.student_name == student)
-    ).values(first_score=score)
-    await database.execute(query2)
-    return {'message': f'{student} отримано оцінку {score}'}
-
-
-@app.get('/course/scores', summary='Переглянути оцінки', tags=['Курси'])
-async def get_scores(course_title: str):
-    result = []
-    query = student_course.select().where(student_course.c.course_title == course_title)
-    course = await database.fetch_all(query)
-    for record in course:
-        result.append({
-            'student': record['student_name'],
-            'score': record['first_score']})
-    return result
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=8000)
 
 
 
